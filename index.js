@@ -114,6 +114,7 @@ const tree = await buildTree();
 
 // additional resources
 tree.set("/style.css", new File(tree.get("/"), "style.css", "style.css", await fs.stat("style.css")));
+tree.get("/").entries.delete("style.css"); // Hide from directory listing
 
 function directoryPage(node) {
 	return el("html", { "lang": "en" },
