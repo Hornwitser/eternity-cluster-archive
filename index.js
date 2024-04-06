@@ -19,28 +19,34 @@ const strcmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base"
 
 class Root {
 	entries = new Map();
+	realPath = ROOT_DIR;
 	get path() {
 		return "/";
 	}
 	toJSON() {
 		return { type: "root", entries: [...this.entries.values()] };
 	}
+	toHTML() {
+		return directoryPage(this);
+	}
 }
 
 class Node {
 	parent;
 	name;
-	constructor(parent, name) {
+	realPath
+	constructor(parent, name, realPath) {
 		this.name = name;
 		this.parent = parent;
+		this.realPath = realPath;
 		parent.entries.set(name, this);
 	}
 }
 
 class File extends Node {
 	stat;
-	constructor(parent, name, stat) {
-		super(parent, name)
+	constructor(parent, name, realPath, stat) {
+		super(parent, name, realPath)
 		this.stat = stat;
 	}
 	get path() {
@@ -59,6 +65,9 @@ class Dir extends Node {
 	toJSON() {
 		return { type: "dir", name: this.name, entries: [...this.entries.values()] };
 	}
+	toHTML() {
+		return directoryPage(this);
+	}
 }
 
 function entryPath(entry) {
@@ -75,13 +84,14 @@ async function buildTree() {
 	for (const entry of entries) {
 		const parentPath = entry.path.slice(ROOT_DIR.length).replace(/\\/g, "/");
 		const parent = tree.get(parentPath + "/");
+		const realPath = entry.path + "/" + entry.name;
 		if (entry.isDirectory()) {
-			const dir = new Dir(parent, entry.name);
+			const dir = new Dir(parent, entry.name, realPath);
 			tree.set(dir.path, dir);
 		}
 		if (entry.isFile()) {
-			const stat = await fs.stat(entry.path + "/" + entry.name);
-			const file = new File(parent, entry.name, stat);
+			const stat = await fs.stat(realPath);
+			const file = new File(parent, entry.name, realPath, stat);
 			tree.set(file.path, file);
 		}
 	}
@@ -90,27 +100,14 @@ async function buildTree() {
 
 console.log("Scanning files");
 const tree = await buildTree();
-const stylesheet = `
-@media (prefers-color-scheme: dark) {
-	html {
-		background: #222227;
-		color: #ddd;
-		max-width: 50rem;
-		margin-inline: auto;
-	}
-}
-pre {
-	margin-inline: 4rem 0;
-}
-* {
-	color-scheme: light dark;
-}
-`.replace(/\t|\n/g, "");
+
+// additional resources
+tree.set("/style.css", new File(tree.get("/"), "style.css", "style.css", await fs.stat("style.css")));
 
 function directoryPage(node) {
 	return el("html", { "lang": "en" },
+		el("link", { rel: "stylesheet", href: PUBLIC_URL + "/style.css" }),
 		el("title", `Directory listing for ${node.path}`),
-		el("style", stylesheet),
 		el("h1", `Directory listing for ${node.path}`),
 		[...node.entries.values()].map(directoryEntry),
 		el("h2", "About"),
@@ -168,7 +165,7 @@ const server = http.createServer((req, res) => {
 				"Content-Type": "text/html; charset=utf-8",
 				"Vary": "Accept",
 			});
-			res.end(htmlDocument(prettify(directoryPage(node))));
+			res.end(htmlDocument(prettify(node.toHTML())));
 		} else if (req.headers.accept && /application\/json/.test(req.headers.accept)) {
 			res.writeHead(200, {
 				"Content-Type": "application/json; charset=utf-8",
@@ -197,7 +194,7 @@ const server = http.createServer((req, res) => {
 	}
 
 	if (node instanceof File) {
-		fs.open(ROOT_DIR + node.path).then((fh) => {
+		fs.open(node.realPath).then((fh) => {
 			const fileStream = fh.createReadStream();
 			res.writeHead(200, {
 				// TODO Add content type of file served.

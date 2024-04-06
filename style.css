@@ -1,0 +1,14 @@
+@media (prefers-color-scheme: dark) {
+	html {
+		background: #222227;
+		color: #ddd;
+		max-width: 50rem;
+		margin-inline: auto;
+	}
+}
+pre {
+	margin-inline: 4rem 0;
+}
+* {
+	color-scheme: light dark;
+}
