@@ -222,6 +222,7 @@ async function handleGet(req, res) {
 
 	if (node instanceof File) {
 		const fh = await fs.open(node.realPath);
+		node.stat = await fh.stat(); // Refresh in case file changed on disk.
 		const fileStream = fh.createReadStream();
 		res.writeHead(200, {
 			"Content-Type": node.mime,
