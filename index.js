@@ -186,22 +186,20 @@ async function handleGet(req, res) {
 	if (node instanceof Dir || node instanceof Root) {
 		// FIXME Hacky content negotation
 		if (req.headers.accept && /text\/html/.test(req.headers.accept)) {
+			const document = htmlDocument(prettify(node.toHTML()))
 			res.writeHead(200, {
 				"Content-Type": "text/html; charset=utf-8",
 				"Vary": "Accept",
 			});
-			res.end(htmlDocument(prettify(node.toHTML())));
+			res.end(document);
 		} else if (req.headers.accept && /application\/json/.test(req.headers.accept)) {
+			const data = JSON.stringify(node, undefined, "\t")
 			res.writeHead(200, {
 				"Content-Type": "application/json; charset=utf-8",
 				"Vary": "Accept",
 			});
-			res.end(JSON.stringify(node, undefined, "\t"));
+			res.end(data);
 		} else {
-			res.writeHead(200, {
-				"Content-Type": "text/plain; charset=utf-8",
-				"Vary": "Accept",
-			});
 			const stack = [node];
 			const lines = [];
 			while (stack.length) {
@@ -213,6 +211,10 @@ async function handleGet(req, res) {
 					lines.push(PUBLIC_URL + current.path + "\n");
 				}
 			}
+			res.writeHead(200, {
+				"Content-Type": "text/plain; charset=utf-8",
+				"Vary": "Accept",
+			});
 			res.end(lines.join(""));
 		}
 		return;
