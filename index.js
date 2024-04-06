@@ -227,7 +227,31 @@ async function handleGet(req, res) {
 			"Content-Type": node.mime,
 			"Content-Length": `${node.stat.size}`,
 		});
-		await stream.pipeline(fileStream, res);
+		await stream.pipeline(
+			fileStream,
+			validateLength(node.stat.size, res),
+			res,
+			// Suppress automatically ending the request stream in case an
+			// error is thrown as the request handler will handle it.
+			{ end: false },
+		);
+		res.end();
+	}
+}
+
+function validateLength(sourceLength, res) {
+	return async function* (source, { signal }) {
+		let read = 0;
+		for await (const chunk of source) {
+			read += chunk.length;
+			if (read > sourceLength) {
+				throw new Error(`Stream too long expected ${sourceLength} bytes got ${read}`);
+			}
+			yield chunk;
+		}
+		if (read < sourceLength) {
+			throw new Error(`Stream too short expected ${sourceLength} bytes got ${read}`);
+		}
 	}
 }
 
