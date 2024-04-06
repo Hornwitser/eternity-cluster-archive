@@ -7,6 +7,12 @@ const PORT = process.env.PORT ? Number.parse(process.env.PORT, 10) : 8000;
 const PUBLIC_URL = envPublicUrl(process.env.PUBLIC_URL ?? "");
 const ROOT_DIR = process.env.ROOT_DIR ?? "public";
 
+const mimeTypes = new Map(Object.entries({
+	".css": "text/css; charset=utf-8",
+	".txt": "text/plain; charset=utf-8",
+	".zip": "application/zip",
+}));
+
 function envPublicUrl(url) {
 	if (url.endsWith("/")) {
 		return url.slice(0, -1);
@@ -48,6 +54,11 @@ class File extends Node {
 	constructor(parent, name, realPath, stat) {
 		super(parent, name, realPath)
 		this.stat = stat;
+		const ext = name.slice(name.lastIndexOf("."));
+		this.mime = mimeTypes.get(ext);
+		if (!this.mime) {
+			throw new Error(`Missing MIME type for ${name}`);
+		}
 	}
 	get path() {
 		return this.parent.path + this.name;
@@ -211,7 +222,7 @@ async function handleGet(req, res) {
 		const fh = await fs.open(node.realPath);
 		const fileStream = fh.createReadStream();
 		res.writeHead(200, {
-			// TODO Add content type of file served.
+			"Content-Type": node.mime,
 			"Content-Length": `${node.stat.size}`,
 		});
 		await stream.pipeline(fileStream, res);
