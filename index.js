@@ -139,7 +139,6 @@ function directoryEntry(entry) {
 
 const server = http.createServer((req, res) => {
 	const address = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
-	console.log(`${req.method} ${req.url} ${address}`);
 
 	// Discard request body (if any) to avoid leaks.
 	req.resume();
@@ -150,6 +149,21 @@ const server = http.createServer((req, res) => {
 		return;
 	}
 
+	handleGet(req, res).then(() => {
+		console.log(`${res.statusCode} ${req.method} ${req.url} ${address}`);
+	}).catch(err => {
+		console.log(`ERR: ${req.method} ${req.url} ${address} ${err.message}`);
+		if (res.headersSent) {
+			res.socket.resetAndDestroy();
+		} else {
+			res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+			res.end(err.stack);
+			return;
+		}
+	});
+});
+
+async function handleGet(req, res) {
 	const url = new URL(req.url, `http://${req.headers.host}`);
 	const node = tree.get(url.pathname);
 	if (!node) {
@@ -194,26 +208,15 @@ const server = http.createServer((req, res) => {
 	}
 
 	if (node instanceof File) {
-		fs.open(node.realPath).then((fh) => {
-			const fileStream = fh.createReadStream();
-			res.writeHead(200, {
-				// TODO Add content type of file served.
-				"Content-Length": `${node.stat.size}`,
-			});
-			return stream.pipeline(fileStream, res);
-		}).catch(err => {
-			console.log(`ERR: ${req.method} ${req.url} ${address} ${err.message}`);
-			if (res.headersSent) {
-				res.socket.resetAndDestroy();
-			} else {
-				res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-				res.end(err.stack);
-				return;
-			}
+		const fh = await fs.open(node.realPath);
+		const fileStream = fh.createReadStream();
+		res.writeHead(200, {
+			// TODO Add content type of file served.
+			"Content-Length": `${node.stat.size}`,
 		});
-		return;
+		await stream.pipeline(fileStream, res);
 	}
-});
+}
 
 console.log(`Listening on ${PORT}`);
 server.listen(PORT);
