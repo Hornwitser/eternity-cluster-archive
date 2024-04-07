@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import stream from "node:stream/promises";
 import { el, htmlDocument, prettify } from "antihtml";
+import yazl from "yazl";
 
 const PORT = process.env.PORT ? Number.parse(process.env.PORT, 10) : 8000;
 const PUBLIC_URL = envPublicUrl(process.env.PUBLIC_URL ?? "");
@@ -19,6 +20,14 @@ function envPublicUrl(url) {
 		return url.slice(0, -1);
 	}
 	return url;
+}
+
+// Encode header token as quoted string
+function quotedString(str) {
+	str = str.replace(/"/, '\"');
+	// Remove non iso-8859-1 characters
+	str = str.replace(/[^\t\x20-\x7e\x80-\xff]/g, "?");
+	return `"${str}"`;
 }
 
 const strcmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }).compare;
@@ -53,6 +62,10 @@ function directoryListing(dir) {
 	return el("div",
 		dir instanceof Root ? null : parentEntry(),
 		map(directoryEntry, dir.entries.values()),
+		el("p",
+			"Download as ",
+			el("a", { href: `${PUBLIC_URL}/pack?format=zip&path=${dir.path}` }, "zip file"),
+		),
 		el("p",
 			"Also available as: ",
 			el("a", { href: `${PUBLIC_URL}/files?format=plain&path=${dir.path}` }, "Plain text listing"),
@@ -338,11 +351,90 @@ class Metadata {
 	}
 }
 
+class Packer {
+	tree;
+	constructor(tree) {
+		this.tree = tree;
+	}
+	async createZipStream(node) {
+		const zipFile = new yazl.ZipFile();
+		if (node instanceof File) {
+			zipFile.addFile(
+				node.realPath,
+				node.name,
+				{ compress: false },
+			);
+		} else {
+			const stack = [node];
+			while (stack.length) {
+				const current = stack.pop();
+				if (current instanceof Dir || current instanceof Root) {
+					stack.push(...[...current.entries.values()].toReversed());
+				}
+				if (current instanceof File) {
+					zipFile.addFile(
+						current.realPath,
+						current.path.slice(node.path.length),
+						{ compress: false },
+					);
+				}
+			}
+		}
+		const zipLength = await new Promise(resolve => {
+			zipFile.end(undefined, resolve);
+		});
+		return [zipFile.outputStream, zipLength];
+	}
+	async get(req, res) {
+		const url = new URL(req.url, `http://${req.headers.host}`);
+		const format = url.searchParams.get("format");
+		const node = this.tree.get(url.searchParams.get("path") ?? "/");
+		if (!node) {
+			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+			res.end("Not Found");
+			return;
+		}
+		let fileName;
+		if (node instanceof Instance) {
+			fileName = node.title.replace(" / ", "");
+		} else if (node instanceof InstancesDir) {
+			fileName = "Eternity Cluster Instances";
+		} else if (node instanceof Root) {
+			fileName = "Eternity Cluster";
+		} else {
+			fileName = node.name;
+		}
+
+		if (format === "zip") {
+			const [zipStream, zipLength] = await this.createZipStream(node);
+			res.writeHead(200, {
+				"Content-Type": "application/zip",
+				"Content-Length": `${zipLength}`,
+				"Content-Disposition": `attachment; filename=${quotedString(fileName + ".zip")}`
+			});
+			await stream.pipeline(
+				zipStream,
+				res,
+				{ end: false },
+			);
+			res.end();
+		} else {
+			const content = Buffer.from(`Invalid format ${format}, valid values: zip`, "utf8");
+			res.writeHead(400, {
+				"Content-Type": "text/plain; charset=utf-8",
+				"Content-Length": `${content.length}`,
+			});
+			res.end(content);
+		}
+	}
+}
+
 // Resources not part of the public files tree
 const resources = new Map();
 resources.set("/style.css", new VirtualFile("style.css", await fs.readFile("style.css")));
 resources.set("/files", new FileListing(tree));
 resources.set("/meta", new Metadata(tree));
+resources.set("/pack", new Packer(tree));
 
 const server = http.createServer((req, res) => {
 	const address = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;

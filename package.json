@@ -3,6 +3,7 @@
 	"type": "module",
 	"name": "eternity-saves",
 	"dependencies": {
-		"antihtml": "^0.2.0"
+		"antihtml": "^0.2.0",
+		"yazl": "^2.5.1"
 	}
 }
