@@ -113,16 +113,21 @@ class Node {
 	}
 }
 
+function mimeFor(name) {
+	const ext = name.slice(name.lastIndexOf("."));
+	const mime = mimeTypes.get(ext);
+	if (!mime) {
+		throw new Error(`Missing MIME type for ${name}`);
+	}
+	return mime;
+}
+
 class File extends Node {
 	stat;
 	constructor(parent, name, realPath, stat) {
 		super(parent, name, realPath)
 		this.stat = stat;
-		const ext = name.slice(name.lastIndexOf("."));
-		this.mime = mimeTypes.get(ext);
-		if (!this.mime) {
-			throw new Error(`Missing MIME type for ${name}`);
-		}
+		this.mime = mimeFor(name);
 	}
 	get path() {
 		return this.parent.path + this.name;
@@ -232,9 +237,25 @@ async function buildTree() {
 console.log("Scanning files");
 const tree = await buildTree();
 
-// additional resources
-tree.set("/style.css", new File(tree.get("/"), "style.css", "style.css", await fs.stat("style.css")));
-tree.get("/").entries.delete("style.css"); // Hide from directory listing
+class VirtualFile {
+	content;
+	constructor(name, content) {
+		this.content = content;
+		this.name = name;
+		this.mime = mimeFor(name);
+	}
+	async get(_req, res) {
+		res.writeHead(200, {
+			"Content-Type": this.mime,
+			"Content-Length": `${this.content.length}`,
+		});
+		res.end(this.content);
+	}
+}
+
+// Resources not part of the public files tree
+const resources = new Map();
+resources.set("/style.css", new VirtualFile("style.css", await fs.readFile("style.css")));
 
 const server = http.createServer((req, res) => {
 	const address = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
@@ -264,6 +285,12 @@ const server = http.createServer((req, res) => {
 
 async function handleGet(req, res) {
 	const url = new URL(req.url, `http://${req.headers.host}`);
+	const resource = resources.get(url.pathname);
+	if (resource) {
+		await resource.get(req, res);
+		return;
+	}
+
 	const node = tree.get(url.pathname);
 	if (!node) {
 		res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
