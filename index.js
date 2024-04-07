@@ -10,6 +10,7 @@ const ROOT_DIR = process.env.ROOT_DIR ?? "public";
 const mimeTypes = new Map(Object.entries({
 	".css": "text/css; charset=utf-8",
 	".txt": "text/plain; charset=utf-8",
+	".json": "application/json; charset=utf-8",
 	".zip": "application/zip",
 }));
 
@@ -22,6 +23,65 @@ function envPublicUrl(url) {
 
 const strcmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }).compare;
 
+function* map(fn, iter) {
+	for (const item of iter) {
+		yield fn(item);
+	}
+}
+
+function basePage(title, ...body) {
+	return el("html", { "lang": "en" },
+		el("head",
+			el("link", { rel: "stylesheet", href: PUBLIC_URL + "/style.css" }),
+			el("title", title),
+		),
+		el("body",
+			el("h1", title),
+			body
+		),
+	);
+}
+
+function aboutSection(node) {
+	return [
+		el("h2", "About"),
+		el("p", "A minimal viable hosting of the saves from the Eternity Cluster."),
+		el("p", "Supports scripted access, for example to get a plain text list of downloadable resources in this directory:"),
+		el("pre", `curl ${PUBLIC_URL}${node.path}`),
+		el("p",
+			"Setting the Accept header to ",
+			el("code", "application/json"),
+			" is also suppoorted and gives structured data",
+		),
+	];
+}
+
+function parentEntry(entry) {
+	return el("div",
+		el("a", { href: "../" }, "../"),
+	);
+}
+
+function directoryEntry(entry) {
+	if (entry instanceof Instance) {
+		return el("div",
+			el("a", { href: entry.name + "/" }, entry.title),
+		);
+	}
+	if (entry instanceof File) {
+		return el("div",
+			el("a", { href: entry.name }, entry.name),
+			` ${entry.stat.size} Bytes`,
+		);
+	}
+	if (entry instanceof Dir) {
+		return el("div",
+			el("a", { href: entry.name + "/" }, `${entry.name}/`),
+		);
+	}
+	throw new Error("Unexpected entry");
+}
+
 
 class Root {
 	entries = new Map();
@@ -33,7 +93,11 @@ class Root {
 		return { type: "root", entries: [...this.entries.values()] };
 	}
 	toHTML() {
-		return directoryPage(this);
+		return basePage(
+			"Eternity Cluster Saves",
+			map(directoryEntry, this.entries.values()),
+			aboutSection(this),
+		);
 	}
 }
 
@@ -77,12 +141,76 @@ class Dir extends Node {
 		return { type: "dir", name: this.name, entries: [...this.entries.values()] };
 	}
 	toHTML() {
-		return directoryPage(this);
+		return basePage(
+			`${this.path} - Eternity Cluster`,
+			parentEntry(this.parent),
+			map(directoryEntry, this.entries.values()),
+		);
+	}
+}
+
+class InstancesDir extends Dir {
+	toHTML() {
+		return basePage(
+			"Eternity Cluster Instances",
+			parentEntry(this.parent),
+			map(directoryEntry, this.entries.values()),
+			aboutSection(this),
+		);
+	}
+}
+
+class Instance extends Dir {
+	config;
+	title;
+	id;
+	constructor(parent, name, realPath, config) {
+		super(parent, name, realPath)
+		this.config = config;
+		this.title = config["instance.name"];
+		this.id = config["instance.id"];
+	}
+	toJSON() {
+		return {
+			type: "instance",
+			name: this.name,
+			title: this.title,
+			id: this.id,
+			entries: [...this.entries.values()]
+		};
+	}
+	toHTML() {
+		return basePage(
+			`${this.title} - Eternity Cluster`,
+			parentEntry(this.parent),
+			map(directoryEntry, this.entries.values()),
+			aboutSection(this),
+		);
 	}
 }
 
 function entryPath(entry) {
 	return "/" + entry.path.replace(/\\/g, "/") + "/" + entry.name;
+}
+
+async function buildEntry(tree, parent, entry, realPath) {
+	if (entry.isDirectory()) {
+		let dir;
+		if (parent instanceof Root && entry.name === "instances") {
+			dir = new InstancesDir(parent, entry.name, realPath);
+		} else if (parent instanceof InstancesDir) {
+			const config = JSON.parse(await fs.readFile(realPath + "/instance.json", "utf8"));
+			dir = new Instance(parent, entry.name, realPath, config);
+		} else {
+			dir = new Dir(parent, entry.name, realPath);
+		}
+		tree.set(dir.path, dir);
+	}
+	if (entry.isFile()) {
+		const stat = await fs.stat(realPath);
+		const file = new File(parent, entry.name, realPath, stat);
+		tree.set(file.path, file);
+	}
 }
 
 async function buildTree() {
@@ -96,15 +224,7 @@ async function buildTree() {
 		const parentPath = entry.path.slice(ROOT_DIR.length).replace(/\\/g, "/");
 		const parent = tree.get(parentPath + "/");
 		const realPath = entry.path + "/" + entry.name;
-		if (entry.isDirectory()) {
-			const dir = new Dir(parent, entry.name, realPath);
-			tree.set(dir.path, dir);
-		}
-		if (entry.isFile()) {
-			const stat = await fs.stat(realPath);
-			const file = new File(parent, entry.name, realPath, stat);
-			tree.set(file.path, file);
-		}
+		await buildEntry(tree, parent, entry, realPath);
 	}
 	return tree;
 }
@@ -115,39 +235,6 @@ const tree = await buildTree();
 // additional resources
 tree.set("/style.css", new File(tree.get("/"), "style.css", "style.css", await fs.stat("style.css")));
 tree.get("/").entries.delete("style.css"); // Hide from directory listing
-
-function directoryPage(node) {
-	return el("html", { "lang": "en" },
-		el("link", { rel: "stylesheet", href: PUBLIC_URL + "/style.css" }),
-		el("title", `Directory listing for ${node.path}`),
-		el("h1", `Directory listing for ${node.path}`),
-		[...node.entries.values()].map(directoryEntry),
-		el("h2", "About"),
-		el("p", "A minimal viable hosting of the saves from the Eternity Cluster."),
-		el("p", "Supports scripted access, for example to get a plain text list of downloadable resources in this directory:"),
-		el("pre", `curl ${PUBLIC_URL}${node.path}`),
-		el("p",
-			"Setting the Accept header to ",
-			el("code", "application/json"),
-			" is also suppoorted and gives structured data",
-		),
-	);
-}
-
-function directoryEntry(entry) {
-	if (entry instanceof File) {
-		return el("div",
-			el("a", { href: entry.name }, entry.name),
-			` ${entry.stat.size} Bytes`,
-		);
-	}
-	if (entry instanceof Dir) {
-		return el("div",
-			el("a", { href: entry.name + "/" }, `${entry.name}/`),
-		);
-	}
-	throw new Error("Unexpected entry");
-}
 
 const server = http.createServer((req, res) => {
 	const address = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
