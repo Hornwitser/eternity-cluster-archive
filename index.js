@@ -46,17 +46,23 @@ function aboutSection(node) {
 	return [
 		el("h2", "About"),
 		el("p", "A minimal viable hosting of the saves from the Eternity Cluster."),
-		el("p", "Supports scripted access, for example to get a plain text list of downloadable resources in this directory:"),
-		el("pre", `curl ${PUBLIC_URL}${node.path}`),
-		el("p",
-			"Setting the Accept header to ",
-			el("code", "application/json"),
-			" is also suppoorted and gives structured data",
-		),
 	];
 }
 
-function parentEntry(entry) {
+function directoryListing(dir) {
+	return el("div",
+		dir instanceof Root ? null : parentEntry(),
+		map(directoryEntry, dir.entries.values()),
+		el("p",
+			"Also available as: ",
+			el("a", { href: `${PUBLIC_URL}/files?format=plain&path=${dir.path}` }, "Plain text listing"),
+			" ",
+			el("a", { href: `${PUBLIC_URL}/meta?path=${dir.path}` }, "JSON structure"),
+		),
+	);
+}
+
+function parentEntry() {
 	return el("div",
 		el("a", { href: "../" }, "../"),
 	);
@@ -95,7 +101,7 @@ class Root {
 	toHTML() {
 		return basePage(
 			"Eternity Cluster Saves",
-			map(directoryEntry, this.entries.values()),
+			directoryListing(this),
 			aboutSection(this),
 		);
 	}
@@ -148,8 +154,7 @@ class Dir extends Node {
 	toHTML() {
 		return basePage(
 			`${this.path} - Eternity Cluster`,
-			parentEntry(this.parent),
-			map(directoryEntry, this.entries.values()),
+			directoryListing(this),
 		);
 	}
 }
@@ -158,9 +163,7 @@ class InstancesDir extends Dir {
 	toHTML() {
 		return basePage(
 			"Eternity Cluster Instances",
-			parentEntry(this.parent),
-			map(directoryEntry, this.entries.values()),
-			aboutSection(this),
+			directoryListing(this),
 		);
 	}
 }
@@ -187,9 +190,7 @@ class Instance extends Dir {
 	toHTML() {
 		return basePage(
 			`${this.title} - Eternity Cluster`,
-			parentEntry(this.parent),
-			map(directoryEntry, this.entries.values()),
-			aboutSection(this),
+			directoryListing(this),
 		);
 	}
 }
@@ -253,9 +254,95 @@ class VirtualFile {
 	}
 }
 
+class FileListing {
+	tree;
+	constructor(tree) {
+		this.tree = tree;
+	}
+	async get(req, res) {
+		const url = new URL(req.url, `http://${req.headers.host}`);
+		const format = url.searchParams.get("format") ?? "plain";
+		const node = this.tree.get(url.searchParams.get("path") ?? "/");
+		if (!node) {
+			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+			res.end("Not Found");
+			return;
+		}
+
+		if (format === "plain") {
+			const stack = [node];
+			const lines = [];
+			while (stack.length) {
+				const current = stack.pop();
+				if (current instanceof Dir || current instanceof Root) {
+					stack.push(...[...current.entries.values()].toReversed());
+				}
+				if (current instanceof File) {
+					lines.push(PUBLIC_URL + current.path + "\n");
+				}
+			}
+			const content = Buffer.from(lines.join(""), "utf8");
+			res.writeHead(200, {
+				"Content-Type": "text/plain; charset=utf-8",
+				"Content-Length": `${content.length}`,
+			});
+			res.end(content);
+		} else if (format === "json") {
+			const stack = [node];
+			const lines = [];
+			while (stack.length) {
+				const current = stack.pop();
+				if (current instanceof Dir || current instanceof Root) {
+					stack.push(...[...current.entries.values()].toReversed());
+				}
+				if (current instanceof File) {
+					lines.push({ type: "file", path: current.path, size: current.stat.size });
+				}
+			}
+			const content = Buffer.from(JSON.stringify(lines, undefined, "\t"), "utf8");
+			res.writeHead(200, {
+				"Content-Type": "application/json; charset=utf-8",
+				"Content-Length": `${content.length}`,
+			});
+			res.end(content);
+		} else {
+			const content = Buffer.from(`Invalid format ${format}, valid values: plain, json`, "utf8");
+			res.writeHead(400, {
+				"Content-Type": "text/plain; charset=utf-8",
+				"Content-Length": `${content.length}`,
+			});
+			res.end(content);
+		}
+	}
+}
+
+class Metadata {
+	tree;
+	constructor(tree) {
+		this.tree = tree;
+	}
+	async get(req, res) {
+		const url = new URL(req.url, `http://${req.headers.host}`);
+		const node = this.tree.get(url.searchParams.get("path") ?? "/");
+		if (!node) {
+			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+			res.end("Not Found");
+			return;
+		}
+		const content = Buffer.from(JSON.stringify(node, undefined, "\t"), "utf8");
+		res.writeHead(200, {
+			"Content-Type": "application/json; charset=utf-8",
+			"Content-Length": `${content.length}`,
+		});
+		res.end(content);
+	}
+}
+
 // Resources not part of the public files tree
 const resources = new Map();
 resources.set("/style.css", new VirtualFile("style.css", await fs.readFile("style.css")));
+resources.set("/files", new FileListing(tree));
+resources.set("/meta", new Metadata(tree));
 
 const server = http.createServer((req, res) => {
 	const address = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
@@ -299,39 +386,12 @@ async function handleGet(req, res) {
 	}
 
 	if (node instanceof Dir || node instanceof Root) {
-		// FIXME Hacky content negotation
-		if (req.headers.accept && /text\/html/.test(req.headers.accept)) {
-			const document = htmlDocument(prettify(node.toHTML()))
-			res.writeHead(200, {
-				"Content-Type": "text/html; charset=utf-8",
-				"Vary": "Accept",
-			});
-			res.end(document);
-		} else if (req.headers.accept && /application\/json/.test(req.headers.accept)) {
-			const data = JSON.stringify(node, undefined, "\t")
-			res.writeHead(200, {
-				"Content-Type": "application/json; charset=utf-8",
-				"Vary": "Accept",
-			});
-			res.end(data);
-		} else {
-			const stack = [node];
-			const lines = [];
-			while (stack.length) {
-				const current = stack.pop();
-				if (current instanceof Dir || current instanceof Root) {
-					stack.push(...[...current.entries.values()].toReversed());
-				}
-				if (current instanceof File) {
-					lines.push(PUBLIC_URL + current.path + "\n");
-				}
-			}
-			res.writeHead(200, {
-				"Content-Type": "text/plain; charset=utf-8",
-				"Vary": "Accept",
-			});
-			res.end(lines.join(""));
-		}
+		const content = Buffer.from(htmlDocument(prettify(node.toHTML())));
+		res.writeHead(200, {
+			"Content-Type": "text/html; charset=utf-8",
+			"Content-Length": `${content.length}`,
+		});
+		res.end(content);
 		return;
 	}
 
