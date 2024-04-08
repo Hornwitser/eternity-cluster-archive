@@ -494,12 +494,13 @@ const server = http.createServer((req, res) => {
 	handleGet(req, res).then(() => {
 		console.log(`${res.statusCode} ${req.method} ${req.url} ${address}`);
 	}).catch(err => {
-		console.log(`ERR: ${req.method} ${req.url} ${address} ${err.message}`);
+		console.log(`ERR ${req.method} ${req.url} ${address} ${err.message}`);
+		console.error(err);
 		if (res.headersSent) {
 			res.socket.resetAndDestroy();
 		} else {
 			res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-			res.end(err.stack);
+			res.end("Internal Server Error");
 			return;
 		}
 	});
