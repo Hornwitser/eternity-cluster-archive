@@ -23,6 +23,18 @@ function envPublicUrl(url) {
 	return url;
 }
 
+function formatBytes(bytes) {
+	if (bytes === 0) {
+		return "0\u{A0}Bytes"; // No-break space
+	}
+	const base = 1000;
+	const units = ["\u{A0}Bytes", "\u{A0}kB", "\u{A0}MB", "\u{A0}GB", "\u{A0}TB"];
+	const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(base)), units.length);
+	const significant = bytes / base ** exponent;
+	const fractionDigits = Number(significant < 99.95) + Number(significant < 9.995);
+	return significant.toFixed(fractionDigits) + units[exponent];
+}
+
 // Encode header token as quoted string
 function quotedString(str) {
 	str = str.replace(/"/, '\"');
@@ -93,6 +105,7 @@ function directoryListing(dir) {
 			el("a", { href: `${PUBLIC_URL}/pack?format=zip&path=${dir.path}` }, "zip file"),
 			" or ",
 			el("a", { href: `${PUBLIC_URL}/pack?format=tar&path=${dir.path}` }, "tar file"),
+			` ${formatBytes(dir.totalSize)}`,
 		),
 		el("p",
 			"Also available as: ",
@@ -110,20 +123,23 @@ function parentEntry() {
 }
 
 function directoryEntry(entry) {
+	const size = formatBytes(entry.totalSize);
 	if (entry instanceof Instance) {
 		return el("div",
 			el("a", { href: entry.name + "/" }, entry.title),
+			` ${entry.entries.get("saves")?.filesCount} Saves ${entry.filesCount} Files ${size}`
 		);
 	}
 	if (entry instanceof File) {
 		return el("div",
 			el("a", { href: entry.name }, entry.name),
-			` ${entry.stat.size} Bytes`,
+			` ${size}`,
 		);
 	}
 	if (entry instanceof Dir) {
 		return el("div",
 			el("a", { href: entry.name + "/" }, `${entry.name}/`),
+			` ${entry.foldersCount} Folders ${entry.filesCount} Files ${size}`
 		);
 	}
 	throw new Error("Unexpected entry");
@@ -133,6 +149,9 @@ function directoryEntry(entry) {
 class Root {
 	entries = new Map();
 	realPath = ROOT_DIR;
+	foldersCount = 0;
+	filesCount = 0;
+	totalSize = 0;
 	get path() {
 		return "/";
 	}
@@ -152,6 +171,9 @@ class Node {
 	parent;
 	name;
 	realPath
+	foldersCount = 0;
+	filesCount = 0;
+	totalSize = 0;
 	constructor(parent, name, realPath) {
 		this.name = name;
 		this.parent = parent;
@@ -273,7 +295,22 @@ async function buildTree() {
 		const realPath = entry.path + "/" + entry.name;
 		await buildEntry(tree, parent, entry, realPath);
 	}
+	calculateMeta(root);
 	return tree;
+}
+
+// Calculates total sizes and item counts down the tree
+function calculateMeta(node) {
+	if (node instanceof Dir || node instanceof Root) {
+		for (const child of node.entries.values()) {
+			calculateMeta(child);
+			node.foldersCount += child.foldersCount + (child instanceof Dir);
+			node.filesCount += child.filesCount + (child instanceof File);
+			node.totalSize += child.totalSize;
+		}
+	} else if (node instanceof File) {
+		node.totalSize = node.stat.size;
+	}
 }
 
 console.log("Scanning files");
