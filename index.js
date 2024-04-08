@@ -3,6 +3,7 @@ import http from "node:http";
 import stream from "node:stream/promises";
 import { el, htmlDocument, prettify } from "antihtml";
 import yazl from "yazl";
+import { TarFile } from "./ustar.js";
 
 const PORT = process.env.PORT ? Number.parse(process.env.PORT, 10) : 8000;
 const PUBLIC_URL = envPublicUrl(process.env.PUBLIC_URL ?? "");
@@ -65,6 +66,8 @@ function directoryListing(dir) {
 		el("p",
 			"Download as ",
 			el("a", { href: `${PUBLIC_URL}/pack?format=zip&path=${dir.path}` }, "zip file"),
+			" or ",
+			el("a", { href: `${PUBLIC_URL}/pack?format=tar&path=${dir.path}` }, "tar file"),
 		),
 		el("p",
 			"Also available as: ",
@@ -385,6 +388,33 @@ class Packer {
 		});
 		return [zipFile.outputStream, zipLength];
 	}
+	async createTarStream(node) {
+		const tarFile = new TarFile();
+		if (node instanceof File) {
+			tarFile.addFile(
+				node.realPath,
+				node.name,
+				node.stat,
+			);
+		} else {
+			const stack = [node];
+			while (stack.length) {
+				const current = stack.pop();
+				if (current instanceof Dir || current instanceof Root) {
+					stack.push(...[...current.entries.values()].toReversed());
+				}
+				if (current instanceof File) {
+					tarFile.addFile(
+						current.realPath,
+						current.path.slice(node.path.length),
+						current.stat,
+					);
+				}
+			}
+		}
+		const tarLength = tarFile.end();
+		return [tarFile.outputStream, tarLength];
+	}
 	async get(req, res) {
 		const url = new URL(req.url, `http://${req.headers.host}`);
 		const format = url.searchParams.get("format");
@@ -418,8 +448,21 @@ class Packer {
 				{ end: false },
 			);
 			res.end();
+		} else if (format === "tar") {
+			const [tarStream, tarLength] = await this.createTarStream(node);
+			res.writeHead(200, {
+				"Content-Type": "application/x-tar",
+				"Content-Length": `${tarLength}`,
+				"Content-Disposition": `attachment; filename=${quotedString(fileName + ".tar")}`
+			});
+			await stream.pipeline(
+				tarStream,
+				res,
+				{ end: false },
+			);
+			res.end();
 		} else {
-			const content = Buffer.from(`Invalid format ${format}, valid values: zip`, "utf8");
+			const content = Buffer.from(`Invalid format ${format}, valid values: zip, tar`, "utf8");
 			res.writeHead(400, {
 				"Content-Type": "text/plain; charset=utf-8",
 				"Content-Length": `${content.length}`,
