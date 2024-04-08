@@ -39,6 +39,18 @@ function* map(fn, iter) {
 	}
 }
 
+function* walkFiles(node) {
+	const stack = [node];
+	while (stack.length) {
+		const current = stack.pop();
+		if (current instanceof Dir || current instanceof Root) {
+			stack.push(...[...current.entries.values()].toReversed());
+		} else if (current instanceof File) {
+			yield current;
+		}
+	}
+}
+
 function textResponse(res, code, text, mime = "text/plain") {
 	const content = Buffer.from(text, "utf8");
 	res.writeHead(code, {
@@ -298,31 +310,14 @@ class FileListing {
 		}
 
 		if (format === "plain") {
-			const stack = [node];
-			const lines = [];
-			while (stack.length) {
-				const current = stack.pop();
-				if (current instanceof Dir || current instanceof Root) {
-					stack.push(...[...current.entries.values()].toReversed());
-				}
-				if (current instanceof File) {
-					lines.push(PUBLIC_URL + current.path + "\n");
-				}
-			}
-			textResponse(res, 200, lines.join(""));
+			const lines = map(file => PUBLIC_URL + file.path + "\n", walkFiles(node));
+			textResponse(res, 200, [...lines].join(""));
 		} else if (format === "json") {
-			const stack = [node];
-			const lines = [];
-			while (stack.length) {
-				const current = stack.pop();
-				if (current instanceof Dir || current instanceof Root) {
-					stack.push(...[...current.entries.values()].toReversed());
-				}
-				if (current instanceof File) {
-					lines.push({ type: "file", path: current.path, size: current.stat.size });
-				}
-			}
-			jsonResponse(res, 200, lines);
+			const lines = map(
+				file => ({ type: "file", path: file.path, size: file.stat.size }),
+				walkFiles(node),
+			);
+			jsonResponse(res, 200, [...lines]);
 		} else {
 			textResponse(res, 400, `Invalid format ${format}, valid values: plain, json`);
 		}
@@ -359,19 +354,12 @@ class Packer {
 				{ compress: false },
 			);
 		} else {
-			const stack = [node];
-			while (stack.length) {
-				const current = stack.pop();
-				if (current instanceof Dir || current instanceof Root) {
-					stack.push(...[...current.entries.values()].toReversed());
-				}
-				if (current instanceof File) {
-					zipFile.addFile(
-						current.realPath,
-						current.path.slice(node.path.length),
-						{ compress: false },
-					);
-				}
+			for (const file of walkFiles(node)) {
+				zipFile.addFile(
+					file.realPath,
+					file.path.slice(node.path.length),
+					{ compress: false },
+				);
 			}
 		}
 		const zipLength = await new Promise(resolve => {
@@ -388,19 +376,12 @@ class Packer {
 				node.stat,
 			);
 		} else {
-			const stack = [node];
-			while (stack.length) {
-				const current = stack.pop();
-				if (current instanceof Dir || current instanceof Root) {
-					stack.push(...[...current.entries.values()].toReversed());
-				}
-				if (current instanceof File) {
-					tarFile.addFile(
-						current.realPath,
-						current.path.slice(node.path.length),
-						current.stat,
-					);
-				}
+			for (const file of walkFiles(node)) {
+				tarFile.addFile(
+					file.realPath,
+					file.path.slice(node.path.length),
+					file.stat,
+				);
 			}
 		}
 		const tarLength = tarFile.end();
