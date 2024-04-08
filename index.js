@@ -39,6 +39,19 @@ function* map(fn, iter) {
 	}
 }
 
+function textResponse(res, code, text, mime = "text/plain") {
+	const content = Buffer.from(text, "utf8");
+	res.writeHead(code, {
+		"Content-Type": `${mime}; charset=utf-8`,
+		"Content-Length": `${content.length}`,
+	});
+	res.end(content);
+}
+
+function jsonResponse(res, code, json) {
+	textResponse(res, code, JSON.stringify(json, undefined, "\t"), "application/json");
+}
+
 function basePage(title, ...body) {
 	return el("html", { "lang": "en" },
 		el("head",
@@ -280,8 +293,7 @@ class FileListing {
 		const format = url.searchParams.get("format") ?? "plain";
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
-			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-			res.end("Not Found");
+			textResponse(res, 404, "Not Found");
 			return;
 		}
 
@@ -297,12 +309,7 @@ class FileListing {
 					lines.push(PUBLIC_URL + current.path + "\n");
 				}
 			}
-			const content = Buffer.from(lines.join(""), "utf8");
-			res.writeHead(200, {
-				"Content-Type": "text/plain; charset=utf-8",
-				"Content-Length": `${content.length}`,
-			});
-			res.end(content);
+			textResponse(res, 200, lines.join(""));
 		} else if (format === "json") {
 			const stack = [node];
 			const lines = [];
@@ -315,19 +322,9 @@ class FileListing {
 					lines.push({ type: "file", path: current.path, size: current.stat.size });
 				}
 			}
-			const content = Buffer.from(JSON.stringify(lines, undefined, "\t"), "utf8");
-			res.writeHead(200, {
-				"Content-Type": "application/json; charset=utf-8",
-				"Content-Length": `${content.length}`,
-			});
-			res.end(content);
+			jsonResponse(res, 200, lines);
 		} else {
-			const content = Buffer.from(`Invalid format ${format}, valid values: plain, json`, "utf8");
-			res.writeHead(400, {
-				"Content-Type": "text/plain; charset=utf-8",
-				"Content-Length": `${content.length}`,
-			});
-			res.end(content);
+			textResponse(res, 400, `Invalid format ${format}, valid values: plain, json`);
 		}
 	}
 }
@@ -341,16 +338,10 @@ class Metadata {
 		const url = new URL(req.url, `http://${req.headers.host}`);
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
-			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-			res.end("Not Found");
+			textResponse(res, 404, "Not Found");
 			return;
 		}
-		const content = Buffer.from(JSON.stringify(node, undefined, "\t"), "utf8");
-		res.writeHead(200, {
-			"Content-Type": "application/json; charset=utf-8",
-			"Content-Length": `${content.length}`,
-		});
-		res.end(content);
+		jsonResponse(res, 200, node);
 	}
 }
 
@@ -420,8 +411,7 @@ class Packer {
 		const format = url.searchParams.get("format");
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
-			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-			res.end("Not Found");
+			textResponse(res, 404, "Not Found");
 			return;
 		}
 		let fileName;
@@ -462,12 +452,7 @@ class Packer {
 			);
 			res.end();
 		} else {
-			const content = Buffer.from(`Invalid format ${format}, valid values: zip, tar`, "utf8");
-			res.writeHead(400, {
-				"Content-Type": "text/plain; charset=utf-8",
-				"Content-Length": `${content.length}`,
-			});
-			res.end(content);
+			textResponse(res, 400, `Invalid format ${format}, valid values: zip, tar`);
 		}
 	}
 }
@@ -486,8 +471,7 @@ const server = http.createServer((req, res) => {
 	req.resume();
 
 	if (req.method !== "GET") {
-		res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
-		res.end("Bad Request");
+		textResponse(res, 400, "Bad Request");
 		return;
 	}
 
@@ -499,8 +483,7 @@ const server = http.createServer((req, res) => {
 		if (res.headersSent) {
 			res.socket.resetAndDestroy();
 		} else {
-			res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-			res.end("Internal Server Error");
+			textResponse(res, 500, "Internal Server Error");
 			return;
 		}
 	});
@@ -516,18 +499,12 @@ async function handleGet(req, res) {
 
 	const node = tree.get(url.pathname);
 	if (!node) {
-		res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-		res.end("Not Found");
+		textResponse(res, 404, "Not Found");
 		return;
 	}
 
 	if (node instanceof Dir || node instanceof Root) {
-		const content = Buffer.from(htmlDocument(prettify(node.toHTML())));
-		res.writeHead(200, {
-			"Content-Type": "text/html; charset=utf-8",
-			"Content-Length": `${content.length}`,
-		});
-		res.end(content);
+		textResponse(res, 200, htmlDocument(prettify(node.toHTML())), "text/html");
 		return;
 	}
 
