@@ -45,22 +45,104 @@ function quotedString(str) {
 
 const strcmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }).compare;
 
+// Functional programming utilities
 function* map(fn, iter) {
 	for (const item of iter) {
 		yield fn(item);
 	}
 }
 
-function* walkFiles(node) {
+function id(value) {
+	return value;
+}
+
+function* filter(fn, iter) {
+	for (const item of iter) {
+		if (fn(item)) {
+			yield item;
+		}
+	}
+}
+
+function last(iter) {
+	let lastItem = undefined;
+	for (const item of iter) {
+		lastItem = item;
+	}
+	return lastItem;
+}
+
+function* walkFiles(node, transform = id) {
 	const stack = [node];
 	while (stack.length) {
-		const current = stack.pop();
+		const current = transform(stack.pop());
 		if (current instanceof Dir || current instanceof Root) {
 			stack.push(...[...current.entries.values()].toReversed());
 		} else if (current instanceof File) {
 			yield current;
 		}
 	}
+}
+
+function fileFilterFromUrl(url) {
+	const createdBeforeValue = url.searchParams.get("created-before");
+	if (createdBeforeValue !== null && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(createdBeforeValue)) {
+		throw new Error(
+			`Invalid created-before ${createdBeforeValue}, valid format 'YYYY-MM-DDTHH:MM'`,
+		);
+	}
+	const createdBeforeMs = createdBeforeValue ? new Date(createdBeforeValue+"Z").getTime() : undefined;
+	if (createdBeforeMs === undefined) {
+		return id;
+	}
+	return node => node.createdAtMs === undefined || node.createdAtMs < createdBeforeMs;
+}
+
+function nodeTransformFromUrl(url, fileFilter) {
+	const instancesAs = url.searchParams.get("instances-as") ?? "folder";
+	if (!["folder", "last-save", "clusterio-last-save"].includes(instancesAs)) {
+		throw new Error(
+			`Invalid instances-as ${instancesAs}, valid values: folder, last-save, clusterio-last-save`,
+		);
+	}
+	if (instancesAs === "folder") {
+		return node => {
+			return fileFilter(node) ? node : undefined;
+		};
+	}
+	if (instancesAs === "last-save") {
+		return node => {
+			if (!(node instanceof Instance)) {
+				return fileFilter(node) ? node : undefined;
+			}
+			const saves = [...node.entries.get("saves").entries.values()];
+			const file = last(filter(fileFilter, saves));
+			if (!file) {
+				return undefined;
+			}
+			return new Save(node.parent, node.title.replace(" / ") + ".zip", file.realPath, file.stat);
+		};
+	}
+	if (instancesAs === "clusterio-last-save") {
+		return node => {
+			if (!(node instanceof Instance)) {
+				return fileFilter(node) ? node : undefined;
+			}
+			const savesDir = node.entries.get("saves");
+			const saves = savesDir.entries.values();
+			const file = last(filter(fileFilter, saves));
+			if (!file) {
+				return undefined;
+			}
+			const instance = new Instance(node.parent, node.name, node.realPath, node.config);
+			instance.entries = new Map(node.entries);
+			const newSavesDir = new SavesDir(instance, "saves", savesDir.realPath);
+			newSavesDir.entries.set(file.name, file);
+			instance.entries.set("saves", newSavesDir);
+			return instance;
+		};
+	}
+	throw new Error("Impossible branch");
 }
 
 function textResponse(res, code, text, mime = "text/plain") {
@@ -89,6 +171,58 @@ function basePage(title, ...body) {
 	);
 }
 
+function downloadSection(node) {
+	const fullName = node instanceof Root ? "Whole Archive" : "Whole Directory";
+	let instances = null;
+	if (node instanceof InstancesDir || node instanceof Instance || node instanceof Root) {
+		instances = el("form", { action: `${PUBLIC_URL}/pack`, method: "GET" },
+			el("input", { type: "hidden", name: "path", value: node.path }),
+			el("h3", `Snapshot`),
+			el("label",
+				"Format ",
+				el("select", { name: "format" },
+					el("option", { value: "zip", selected: "" }, "Zip"),
+					el("option", { value: "tar" }, "Tar"),
+				),
+			),
+			el("label",
+				"Instances as ",
+				el("select", { name: "instances-as" },
+					el("option", { value: "last-save", selected: "" }, "Single save"),
+					el("option", { value: "clusterio-last-save" }, "Clusterio Compatible Folder"),
+				),
+			),
+			el("label",
+				"Time point ",
+				el("select", { name: "created-before" },
+					el("option", { value: "2024-01-29T03:00" }, "1 kSPM"),
+					el("option", { value: "2024-01-29T17:00" }, "10 kSPM"),
+					el("option", { value: "2024-02-01T03:00" }, "100 kSPM"),
+					el("option", { value: "2024-03-10T12:00", selected: "" }, "1000 kSPM"),
+					el("option", { value: "2024-03-31T23:59" }, "Last saves"),
+				),
+			),
+			el("button", { type: "submit" }, "Download"),
+		);
+	}
+	return [
+		el("h2", "Download"),
+		el("form", { action: `${PUBLIC_URL}/pack?path=${node.path}`, method: "GET" },
+			el("input", { type: "hidden", name: "path", value: node.path }),
+			el("h3", `${fullName} (${formatBytes(node.totalSize)})`),
+			el("label",
+				"Format ",
+				el("select", { name: "format" },
+					el("option", { value: "zip", selected: "" }, "Zip"),
+					el("option", { value: "tar" }, "Tar"),
+				),
+			),
+			el("button", { type: "submit" }, "Download"),
+		),
+		instances,
+	];
+}
+
 function aboutSection(node) {
 	return [
 		el("h2", "About"),
@@ -100,13 +234,6 @@ function directoryListing(dir) {
 	return el("div",
 		dir instanceof Root ? null : parentEntry(),
 		map(directoryEntry, dir.entries.values()),
-		el("p",
-			"Download as ",
-			el("a", { href: `${PUBLIC_URL}/pack?format=zip&path=${dir.path}` }, "zip file"),
-			" or ",
-			el("a", { href: `${PUBLIC_URL}/pack?format=tar&path=${dir.path}` }, "tar file"),
-			` ${formatBytes(dir.totalSize)}`,
-		),
 		el("p",
 			"Also available as: ",
 			el("a", { href: `${PUBLIC_URL}/files?format=plain&path=${dir.path}` }, "Plain text listing"),
@@ -163,6 +290,7 @@ class Root {
 			"Eternity Cluster Saves",
 			directoryListing(this),
 			aboutSection(this),
+			downloadSection(this),
 		);
 	}
 }
@@ -174,11 +302,11 @@ class Node {
 	foldersCount = 0;
 	filesCount = 0;
 	totalSize = 0;
+	createdAtMs;
 	constructor(parent, name, realPath) {
 		this.name = name;
 		this.parent = parent;
 		this.realPath = realPath;
-		parent.entries.set(name, this);
 	}
 }
 
@@ -206,18 +334,33 @@ class File extends Node {
 	}
 }
 
+class Save extends File {
+	constructor(parent, name, realPath, stat) {
+		super(parent, name, realPath, stat)
+		this.createdAtMs = new Date(name.replace(/_/g, ":").slice(0, -4)).getTime();
+	}
+	get path() {
+		return this.parent.path + this.name;
+	}
+	toJSON() {
+		return { type: "save", name: this.name, size: this.stat.size, created: this.createdAtMs / 1000 };
+	}
+}
+
 class Dir extends Node {
 	entries = new Map();
 	get path() {
 		return this.parent.path + this.name + "/";
 	}
 	toJSON() {
-		return { type: "dir", name: this.name, entries: [...this.entries.values()] };
+		const created = this.createdAtMs !== undefined ? this.createdAtMs / 1000 : undefined;
+		return { type: "dir", name: this.name, created, entries: [...this.entries.values()] };
 	}
 	toHTML() {
 		return basePage(
 			`${this.path} - Eternity Cluster`,
 			directoryListing(this),
+			downloadSection(this),
 		);
 	}
 }
@@ -227,6 +370,7 @@ class InstancesDir extends Dir {
 		return basePage(
 			"Eternity Cluster Instances",
 			directoryListing(this),
+			downloadSection(this),
 		);
 	}
 }
@@ -242,11 +386,13 @@ class Instance extends Dir {
 		this.id = config["instance.id"];
 	}
 	toJSON() {
+		const created = this.createdAtMs !== undefined ? this.createdAtMs / 1000 : undefined;
 		return {
 			type: "instance",
 			name: this.name,
 			title: this.title,
 			id: this.id,
+			created,
 			entries: [...this.entries.values()]
 		};
 	}
@@ -254,8 +400,12 @@ class Instance extends Dir {
 		return basePage(
 			`${this.title} - Eternity Cluster`,
 			directoryListing(this),
+			downloadSection(this),
 		);
 	}
+}
+
+class SavesDir extends Dir {
 }
 
 function entryPath(entry) {
@@ -270,14 +420,23 @@ async function buildEntry(tree, parent, entry, realPath) {
 		} else if (parent instanceof InstancesDir) {
 			const config = JSON.parse(await fs.readFile(realPath + "/instance.json", "utf8"));
 			dir = new Instance(parent, entry.name, realPath, config);
+		} else if (parent instanceof Instance && entry.name === "saves") {
+			dir = new SavesDir(parent, entry.name, realPath);
 		} else {
 			dir = new Dir(parent, entry.name, realPath);
 		}
+		parent.entries.set(entry.name, dir);
 		tree.set(dir.path, dir);
 	}
 	if (entry.isFile()) {
 		const stat = await fs.stat(realPath);
-		const file = new File(parent, entry.name, realPath, stat);
+		let file;
+		if (parent instanceof SavesDir) {
+			file = new Save(parent, entry.name, realPath, stat);
+		} else {
+			file = new File(parent, entry.name, realPath, stat);
+		}
+		parent.entries.set(entry.name, file);
 		tree.set(file.path, file);
 	}
 }
@@ -307,6 +466,9 @@ function calculateMeta(node) {
 			node.foldersCount += child.foldersCount + (child instanceof Dir);
 			node.filesCount += child.filesCount + (child instanceof File);
 			node.totalSize += child.totalSize;
+			if (child.createdAtMs !== undefined) {
+				node.createdAtMs = Math.min(node.createdAtMs ?? +Infinity, child.createdAtMs);
+			}
 		}
 	} else if (node instanceof File) {
 		node.totalSize = node.stat.size;
@@ -339,6 +501,12 @@ class FileListing {
 	}
 	async get(req, res) {
 		const url = new URL(req.url, `http://${req.headers.host}`);
+		let fileFilter;
+		try {
+			fileFilter = fileFilterFromUrl(url);
+		} catch (err) {
+			textResponse(res, 400, err.message);
+		}
 		const format = url.searchParams.get("format") ?? "plain";
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
@@ -346,14 +514,12 @@ class FileListing {
 			return;
 		}
 
+		const files = walkFiles(node, n => fileFilter(n) ? n : undefined);
 		if (format === "plain") {
-			const lines = map(file => PUBLIC_URL + file.path + "\n", walkFiles(node));
+			const lines = map(file => PUBLIC_URL + file.path + "\n", files);
 			textResponse(res, 200, [...lines].join(""));
 		} else if (format === "json") {
-			const lines = map(
-				file => ({ type: "file", path: file.path, size: file.stat.size }),
-				walkFiles(node),
-			);
+			const lines = map(file => ({ type: "file", path: file.path, size: file.stat.size }), files);
 			jsonResponse(res, 200, [...lines]);
 		} else {
 			textResponse(res, 400, `Invalid format ${format}, valid values: plain, json`);
@@ -377,61 +543,60 @@ class Metadata {
 	}
 }
 
+async function createZipStream(files, nameFn) {
+	const zipFile = new yazl.ZipFile();
+	for (const file of files) {
+		zipFile.addFile(
+			file.realPath,
+			nameFn(file),
+			{ compress: false },
+		);
+	}
+	const zipLength = await new Promise(resolve => {
+		zipFile.end(undefined, resolve);
+	});
+	return [zipFile.outputStream, zipLength];
+}
+
+async function createTarStream(files, nameFn) {
+	const tarFile = new TarFile();
+	for (const file of files) {
+		tarFile.addFile(
+			file.realPath,
+			nameFn(file),
+			file.stat,
+		);
+	}
+	const tarLength = tarFile.end();
+	return [tarFile.outputStream, tarLength];
+}
+
 class Packer {
 	tree;
 	constructor(tree) {
 		this.tree = tree;
 	}
-	async createZipStream(node) {
-		const zipFile = new yazl.ZipFile();
-		if (node instanceof File) {
-			zipFile.addFile(
-				node.realPath,
-				node.name,
-				{ compress: false },
-			);
-		} else {
-			for (const file of walkFiles(node)) {
-				zipFile.addFile(
-					file.realPath,
-					file.path.slice(node.path.length),
-					{ compress: false },
-				);
-			}
-		}
-		const zipLength = await new Promise(resolve => {
-			zipFile.end(undefined, resolve);
-		});
-		return [zipFile.outputStream, zipLength];
-	}
-	async createTarStream(node) {
-		const tarFile = new TarFile();
-		if (node instanceof File) {
-			tarFile.addFile(
-				node.realPath,
-				node.name,
-				node.stat,
-			);
-		} else {
-			for (const file of walkFiles(node)) {
-				tarFile.addFile(
-					file.realPath,
-					file.path.slice(node.path.length),
-					file.stat,
-				);
-			}
-		}
-		const tarLength = tarFile.end();
-		return [tarFile.outputStream, tarLength];
-	}
 	async get(req, res) {
 		const url = new URL(req.url, `http://${req.headers.host}`);
 		const format = url.searchParams.get("format");
+		let fileFilter;
+		try {
+			fileFilter = fileFilterFromUrl(url);
+		} catch (err) {
+			textResponse(res, 400, err.message);
+		}
+		let nodeTransform;
+		try {
+			nodeTransform = nodeTransformFromUrl(url, fileFilter);
+		} catch (err) {
+			textResponse(res, 400, err.message);
+		}
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
 			textResponse(res, 404, "Not Found");
 			return;
 		}
+		const files = walkFiles(node, nodeTransform);
 		let fileName;
 		if (node instanceof Instance) {
 			fileName = node.title.replace(" / ", "");
@@ -442,9 +607,11 @@ class Packer {
 		} else {
 			fileName = node.name;
 		}
+		const lastSlashIndex = node.path.lastIndexOf("/") + 1;
+		const nameFn = file => file.path.slice(Math.min(lastSlashIndex, file.path.lastIndexOf("/") + 1));
 
 		if (format === "zip") {
-			const [zipStream, zipLength] = await this.createZipStream(node);
+			const [zipStream, zipLength] = await createZipStream(files, nameFn);
 			res.writeHead(200, {
 				"Content-Type": "application/zip",
 				"Content-Length": `${zipLength}`,
@@ -457,7 +624,7 @@ class Packer {
 			);
 			res.end();
 		} else if (format === "tar") {
-			const [tarStream, tarLength] = await this.createTarStream(node);
+			const [tarStream, tarLength] = await createTarStream(files, nameFn);
 			res.writeHead(200, {
 				"Content-Type": "application/x-tar",
 				"Content-Length": `${tarLength}`,
