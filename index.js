@@ -268,7 +268,7 @@ function directoryEntry(entry) {
 	if (entry instanceof Instance) {
 		return el("div",
 			el("a", { href: entry.name + "/" }, entry.title),
-			` ${entry.entries.get("saves")?.filesCount} Saves ${entry.filesCount} Files ${size}`
+			` ${entry.entries.get("saves")?.filesCount} Saves ${size}`
 		);
 	}
 	if (entry instanceof File) {
@@ -301,7 +301,7 @@ class Root {
 	}
 	toHTML() {
 		return basePage(
-			"Eternity Cluster Saves",
+			"Eternity Cluster Archive",
 			directoryListing(this),
 			aboutSection(this),
 			downloadSection(this),
@@ -420,6 +420,13 @@ class Instance extends Dir {
 }
 
 class SavesDir extends Dir {
+	toHTML() {
+		return basePage(
+			`Saves for ${this.parent.title} - Eternity Cluster`,
+			directoryListing(this),
+			downloadSection(this),
+		);
+	}
 }
 
 function entryPath(entry) {
@@ -599,7 +606,7 @@ class Packer {
 		} else if (node instanceof InstancesDir) {
 			fileName = "Eternity Cluster Instances";
 		} else if (node instanceof Root) {
-			fileName = "Eternity Cluster";
+			fileName = "Eternity Cluster Archive";
 		} else {
 			fileName = node.name;
 		}
