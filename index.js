@@ -106,10 +106,20 @@ function fileFilterFromUrl(url) {
 		);
 	}
 	const createdBeforeMs = createdBeforeValue ? new Date(createdBeforeValue+"Z").getTime() : undefined;
-	if (createdBeforeMs === undefined) {
+	const modifiedAfterValue = url.searchParams.get("modified-after");
+	if (modifiedAfterValue !== null && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(modifiedAfterValue)) {
+		throw new BadRequest(
+			`Invalid modified-after ${modifiedAfterValue}, valid format 'YYYY-MM-DDTHH:MM'`,
+		);
+	}
+	const modifiedAfterMs = modifiedAfterValue ? new Date(modifiedAfterValue+"Z").getTime() : undefined;
+	if (createdBeforeMs === undefined && modifiedAfterMs === undefined) {
 		return id;
 	}
-	return node => node.createdAtMs === undefined || node.createdAtMs < createdBeforeMs;
+	return node => (
+		(createdBeforeMs === undefined || node.createdAtMs === undefined || node.createdAtMs < createdBeforeMs)
+		&& (modifiedAfterMs === undefined || node.modifiedAtMs === undefined || node.modifiedAtMs > modifiedAfterMs)
+	);
 }
 
 function nodeTransformFromUrl(url, fileFilter) {
@@ -286,6 +296,9 @@ function directoryEntry(entry) {
 	throw new Error("Unexpected entry");
 }
 
+function maybeTs(tsMs) {
+	return tsMs !== undefined ? tsMs / 1000 : undefined;
+}
 
 class Root {
 	entries = new Map();
@@ -317,6 +330,7 @@ class Node {
 	filesCount = 0;
 	totalSize = 0;
 	createdAtMs;
+	modifiedAtMs;
 	constructor(parent, name, realPath) {
 		this.name = name;
 		this.parent = parent;
@@ -338,13 +352,19 @@ class File extends Node {
 	constructor(parent, name, realPath, stat) {
 		super(parent, name, realPath)
 		this.stat = stat;
+		this.modifiedAtMs = stat.mtimeMs;
 		this.mime = mimeFor(name);
 	}
 	get path() {
 		return this.parent.path + this.name;
 	}
 	toJSON() {
-		return { type: "file", name: this.name, size: this.stat.size };
+		return {
+			type: "file",
+			name: this.name,
+			size: this.stat.size,
+			modified: this.modifiedAtMs / 1000,
+		};
 	}
 }
 
@@ -357,7 +377,13 @@ class Save extends File {
 		return this.parent.path + this.name;
 	}
 	toJSON() {
-		return { type: "save", name: this.name, size: this.stat.size, created: this.createdAtMs / 1000 };
+		return {
+			type: "save",
+			name: this.name,
+			size: this.stat.size,
+			created: this.createdAtMs / 1000,
+			modified: this.modifiedAtMs / 1000,
+		};
 	}
 }
 
@@ -367,8 +393,13 @@ class Dir extends Node {
 		return this.parent.path + this.name + "/";
 	}
 	toJSON() {
-		const created = this.createdAtMs !== undefined ? this.createdAtMs / 1000 : undefined;
-		return { type: "dir", name: this.name, created, entries: [...this.entries.values()] };
+		return {
+			type: "dir",
+			name: this.name,
+			created: maybeTs(this.createdAtMs),
+			modified: maybeTs(this.modifiedAtMs),
+			entries: [...this.entries.values()]
+		};
 	}
 	toHTML() {
 		return basePage(
@@ -400,13 +431,13 @@ class Instance extends Dir {
 		this.id = config["instance.id"];
 	}
 	toJSON() {
-		const created = this.createdAtMs !== undefined ? this.createdAtMs / 1000 : undefined;
 		return {
 			type: "instance",
 			name: this.name,
 			title: this.title,
 			id: this.id,
-			created,
+			created: maybeTs(this.createdAtMs),
+			modified: maybeTs(this.modifiedAtMs),
 			entries: [...this.entries.values()]
 		};
 	}
@@ -490,6 +521,9 @@ function calculateMeta(node) {
 			if (child.createdAtMs !== undefined) {
 				node.createdAtMs = Math.min(node.createdAtMs ?? +Infinity, child.createdAtMs);
 			}
+			if (child.modifiedAtMs !== undefined) {
+				node.modifiedAtMs = Math.max(node.modifiedAtMs ?? -Infinity, child.modifiedAtMs);
+			}
 		}
 	} else if (node instanceof File) {
 		node.totalSize = node.stat.size;
@@ -534,7 +568,13 @@ class FileListing {
 			const lines = map(file => PUBLIC_URL + file.path + "\n", files);
 			textResponse(res, 200, [...lines].join(""));
 		} else if (format === "json") {
-			const lines = map(file => ({ type: "file", path: file.path, size: file.stat.size }), files);
+			const lines = map(file => ({
+				type: "file",
+				path: file.path,
+				size: file.stat.size,
+				created: maybeTs(file.createdAtMs),
+				modified: file.modifiedAtMs / 1000,
+			}), files);
 			jsonResponse(res, 200, [...lines]);
 		} else {
 			throw new BadRequest(`Invalid format ${format}, valid values: plain, json`);
