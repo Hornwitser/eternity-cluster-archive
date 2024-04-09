@@ -84,10 +84,24 @@ function* walkFiles(node, transform = id) {
 	}
 }
 
+class RequestError extends Error {}
+class BadRequest extends RequestError {
+	constructor(message = "Bad Request") {
+		super(message);
+		this.code = 400;
+	}
+}
+class NotFound extends RequestError {
+	constructor(message = "Not Found") {
+		super(message);
+		this.code = 404;
+	}
+}
+
 function fileFilterFromUrl(url) {
 	const createdBeforeValue = url.searchParams.get("created-before");
 	if (createdBeforeValue !== null && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(createdBeforeValue)) {
-		throw new Error(
+		throw new BadRequest(
 			`Invalid created-before ${createdBeforeValue}, valid format 'YYYY-MM-DDTHH:MM'`,
 		);
 	}
@@ -101,7 +115,7 @@ function fileFilterFromUrl(url) {
 function nodeTransformFromUrl(url, fileFilter) {
 	const instancesAs = url.searchParams.get("instances-as") ?? "folder";
 	if (!["folder", "last-save", "clusterio-last-save"].includes(instancesAs)) {
-		throw new Error(
+		throw new BadRequest(
 			`Invalid instances-as ${instancesAs}, valid values: folder, last-save, clusterio-last-save`,
 		);
 	}
@@ -501,17 +515,11 @@ class FileListing {
 	}
 	async get(req, res) {
 		const url = new URL(req.url, `http://${req.headers.host}`);
-		let fileFilter;
-		try {
-			fileFilter = fileFilterFromUrl(url);
-		} catch (err) {
-			textResponse(res, 400, err.message);
-		}
+		const fileFilter = fileFilterFromUrl(url);
 		const format = url.searchParams.get("format") ?? "plain";
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
-			textResponse(res, 404, "Not Found");
-			return;
+			throw new NotFound();
 		}
 
 		const files = walkFiles(node, n => fileFilter(n) ? n : undefined);
@@ -522,7 +530,7 @@ class FileListing {
 			const lines = map(file => ({ type: "file", path: file.path, size: file.stat.size }), files);
 			jsonResponse(res, 200, [...lines]);
 		} else {
-			textResponse(res, 400, `Invalid format ${format}, valid values: plain, json`);
+			throw new BadRequest(`Invalid format ${format}, valid values: plain, json`);
 		}
 	}
 }
@@ -536,8 +544,7 @@ class Metadata {
 		const url = new URL(req.url, `http://${req.headers.host}`);
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
-			textResponse(res, 404, "Not Found");
-			return;
+			throw new NotFound();
 		}
 		jsonResponse(res, 200, node);
 	}
@@ -579,22 +586,11 @@ class Packer {
 	async get(req, res) {
 		const url = new URL(req.url, `http://${req.headers.host}`);
 		const format = url.searchParams.get("format");
-		let fileFilter;
-		try {
-			fileFilter = fileFilterFromUrl(url);
-		} catch (err) {
-			textResponse(res, 400, err.message);
-		}
-		let nodeTransform;
-		try {
-			nodeTransform = nodeTransformFromUrl(url, fileFilter);
-		} catch (err) {
-			textResponse(res, 400, err.message);
-		}
+		const fileFilter = fileFilterFromUrl(url);
+		const nodeTransform = nodeTransformFromUrl(url, fileFilter);
 		const node = this.tree.get(url.searchParams.get("path") ?? "/");
 		if (!node) {
-			textResponse(res, 404, "Not Found");
-			return;
+			throw new NotFound()
 		}
 		const files = walkFiles(node, nodeTransform);
 		let fileName;
@@ -637,7 +633,7 @@ class Packer {
 			);
 			res.end();
 		} else {
-			textResponse(res, 400, `Invalid format ${format}, valid values: zip, tar`);
+			throw new BadRequest(`Invalid format ${format}, valid values: zip, tar`);
 		}
 	}
 }
@@ -663,13 +659,18 @@ const server = http.createServer((req, res) => {
 	handleGet(req, res).then(() => {
 		console.log(`${res.statusCode} ${req.method} ${req.url} ${address}`);
 	}).catch(err => {
-		console.log(`ERR ${req.method} ${req.url} ${address} ${err.message}`);
-		console.error(err);
+		const code = err instanceof RequestError ? err.code : 500;
+		const message = err instanceof RequestError ? err.message : "Internal Server Error";
 		if (res.headersSent) {
+			console.log(`RST ${req.method} ${req.url} ${address} ${message}`);
 			res.socket.resetAndDestroy();
 		} else {
-			textResponse(res, 500, "Internal Server Error");
+			console.log(`${code} ${req.method} ${req.url} ${address} ${message}`);
+			textResponse(res, code, message);
 			return;
+		}
+		if (code === 500) {
+			console.error(err);
 		}
 	});
 });
@@ -684,8 +685,7 @@ async function handleGet(req, res) {
 
 	const node = tree.get(url.pathname);
 	if (!node) {
-		textResponse(res, 404, "Not Found");
-		return;
+		throw new NotFound();
 	}
 
 	if (node instanceof Dir || node instanceof Root) {
