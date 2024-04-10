@@ -6,3 +6,4 @@ compose.yaml
 node_modules
 public
 README.md
+.env
