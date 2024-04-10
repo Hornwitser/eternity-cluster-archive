@@ -248,9 +248,22 @@ function downloadSection(node) {
 }
 
 function aboutSection(node) {
+	const mirrors = {
+		"https://www.hornwitser.no/eternity-saves/": "(100 Mbit/s)",
+		"https://wildwolf.dev/eternity-saves/": "(~400 Mbit/s cached on Cloudflare)",
+		"https://a.d-a.fi/": "(1 Gbit/s)",
+	};
 	return [
 		el("h2", "About"),
-		el("p", "A minimal viable hosting of the saves from the Eternity Cluster."),
+		el("p", "A archive of the saves from the Eternity Cluster."),
+		el("h3", "Mirrors"),
+		el("p", "This archive is also available on these mirrors"),
+		el("ul",
+			map(
+				([href, note])  => el("li", el("a", { href }, href), " ", note),
+				Object.entries(mirrors)
+			),
+		),
 	];
 }
 

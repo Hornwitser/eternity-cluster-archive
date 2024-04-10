@@ -5,3 +5,4 @@ compose.yaml
 .gitignore
 node_modules
 public
+README.md
