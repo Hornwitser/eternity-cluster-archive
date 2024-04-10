@@ -727,7 +727,6 @@ const server = http.createServer((req, res) => {
 		} else {
 			console.log(`${code} ${req.method} ${req.url} ${address} ${message}`);
 			textResponse(res, code, message);
-			return;
 		}
 		if (code === 500) {
 			console.error(err);
