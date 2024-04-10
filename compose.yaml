@@ -1,0 +1,15 @@
+services:
+  archive:
+    build: "."
+    init: true
+    ports:
+      - "8000:8000"
+    volumes:
+      - "./public:/public:ro"
+    develop:
+      watch:
+        - path: "."
+          action: "sync+restart"
+          target: "/app"
+        - path: "package.json"
+          action: "rebuild"
