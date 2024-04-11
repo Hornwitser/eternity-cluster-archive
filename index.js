@@ -23,7 +23,18 @@ function envPublicUrl(url) {
 	return url;
 }
 
-function formatBytes(bytes) {
+function formatTime(tsMs) {
+	const date = new Date(tsMs);
+	return `\
+${date.getUTCFullYear()}-\
+${String(date.getUTCMonth() + 1).padStart(2, "0")}-\
+${String(date.getUTCDate()).padStart(2, "0")} \
+${String(date.getUTCHours()).padStart(2, "0")}:\
+${String(date.getUTCMinutes()).padStart(2, "0")}:\
+${String(date.getUTCSeconds()).padStart(2, "0")}`;
+}
+
+function formatBytes(bytes, indented = false) {
 	if (bytes === 0) {
 		return "0\u{A0}Bytes"; // No-break space
 	}
@@ -32,7 +43,9 @@ function formatBytes(bytes) {
 	const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(base)), units.length);
 	const significant = bytes / base ** exponent;
 	const fractionDigits = Number(significant < 99.95) + Number(significant < 9.995);
-	return significant.toFixed(fractionDigits) + units[exponent];
+	const indent = "\u{2002}\u{2002}\u{2002} ".repeat(Math.max(3 - exponent, 0));
+	const spaces = indent + "\u{2002}".repeat(Number(significant < 100) + Number(significant < 10));
+	return (indented ? spaces : "") + significant.toFixed(fractionDigits) + units[exponent];
 }
 
 // Encode header token as quoted string
@@ -185,6 +198,7 @@ function jsonResponse(res, code, json) {
 function basePage(title, ...body) {
 	return el("html", { "lang": "en" },
 		el("head",
+			el("meta", { name: "viewport", content: "width=device-width" }),
 			el("link", { rel: "stylesheet", href: PUBLIC_URL + "/style.css" }),
 			el("title", title),
 		),
@@ -201,7 +215,7 @@ function downloadSection(node) {
 	if (node instanceof InstancesDir || node instanceof Instance || node instanceof Root) {
 		instances = el("form", { action: `${PUBLIC_URL}/pack`, method: "GET" },
 			el("input", { type: "hidden", name: "path", value: node.path }),
-			el("h3", `Snapshot`),
+			el("h3", `Download Snapshot`),
 			el("label",
 				"Format ",
 				el("select", { name: "format" },
@@ -229,11 +243,10 @@ function downloadSection(node) {
 			el("button", { type: "submit" }, "Download"),
 		);
 	}
-	return [
-		el("h2", "Download"),
+	return el("section", { class: "download" },
 		el("form", { action: `${PUBLIC_URL}/pack?path=${node.path}`, method: "GET" },
 			el("input", { type: "hidden", name: "path", value: node.path }),
-			el("h3", `${fullName} (${formatBytes(node.totalSize)})`),
+			el("h3", `Download ${fullName} (${formatBytes(node.totalSize)})`),
 			el("label",
 				"Format ",
 				el("select", { name: "format" },
@@ -244,7 +257,7 @@ function downloadSection(node) {
 			el("button", { type: "submit" }, "Download"),
 		),
 		instances,
-	];
+	);
 }
 
 function aboutSection(node) {
@@ -255,7 +268,11 @@ function aboutSection(node) {
 	};
 	return [
 		el("h2", "About"),
-		el("p", "A archive of the saves from the Eternity Cluster."),
+		el("p",
+			"An archive of the saves from the Eternity Cluster. See the ",
+			el("a", { href: "https://github.com/Hornwitser/eternity-cluster-archive" }, "eternity-cluster-archive"),
+			" repository for contributing and hosting your own copy.",
+		),
 		el("h3", "Mirrors"),
 		el("p", "This archive is also available on these mirrors"),
 		el("ul",
@@ -268,10 +285,22 @@ function aboutSection(node) {
 }
 
 function directoryListing(dir) {
-	return el("div",
-		dir instanceof Root ? null : parentEntry(),
-		map(directoryEntry, dir.entries.values()),
-		el("p",
+	return el("main",
+		el("h2", `Directory ${dir.path.replace(/\/(?!$)/g, "/\u{200B}")}`),
+		el("ul", { class: "dir" },
+			el("li",
+				el("span", { class: "header name" }, "Name"),
+				" ",
+				el("span", { class: "header content" }, "Content"),
+				" ",
+				el("span", { class: "header size" }, "Size"),
+				" ",
+				el("span", { class: "header created" }, "Created"),
+			),
+			dir instanceof Root ? null : parentEntry(),
+			map(directoryEntry, dir.entries.values()),
+		),
+		el("p", { class: "no-print" },
 			"Also available as: ",
 			el("a", { href: `${PUBLIC_URL}/files?format=plain&path=${dir.path}` }, "Plain text listing"),
 			" ",
@@ -281,29 +310,46 @@ function directoryListing(dir) {
 }
 
 function parentEntry() {
-	return el("div",
+	return el("li",
 		el("a", { href: "../" }, "../"),
 	);
 }
 
 function directoryEntry(entry) {
-	const size = formatBytes(entry.totalSize);
+	const size = formatBytes(entry.totalSize, true);
 	if (entry instanceof Instance) {
-		return el("div",
-			el("a", { href: entry.name + "/" }, entry.title),
-			` ${entry.entries.get("saves")?.filesCount} Saves ${size}`
+		return el("li",
+			el("a", { class: "name", href: entry.name + "/" }, entry.title),
+			" ",
+			el("span", { class: "content" }, `${entry.entries.get("saves")?.filesCount} Saves`),
+			" ",
+			el("span", { class: "size" }, size),
+			" ",
+			el("span", { class: "created" }, formatTime(entry.createdAtMs)),
 		);
 	}
 	if (entry instanceof File) {
-		return el("div",
-			el("a", { href: entry.name }, entry.name),
-			` ${size}`,
+		return el("li",
+			el("a", { class: "name", href: entry.name }, entry.name),
+			" ",
+			el("span", { class: "size" }, size),
+			entry.createdAtMs ? [
+				" ",
+				el("span", { class: "created" }, formatTime(entry.createdAtMs)),
+			] : null,
 		);
 	}
 	if (entry instanceof Dir) {
-		return el("div",
-			el("a", { href: entry.name + "/" }, `${entry.name}/`),
-			` ${entry.foldersCount} Folders ${entry.filesCount} Files ${size}`
+		return el("li",
+			el("a", { class: "name", href: entry.name + "/" }, `${entry.name}/`),
+			" ",
+			el("span", { class: "content" }, `${entry.foldersCount} Folders ${entry.filesCount} Files`),
+			" ",
+			el("span", { class: "size" }, size),
+			entry.createdAtMs ? [
+				" ",
+				el("span", { class: "created" }, formatTime(entry.createdAtMs)),
+			] : null,
 		);
 	}
 	throw new Error("Unexpected entry");
@@ -329,8 +375,8 @@ class Root {
 		return basePage(
 			"Eternity Cluster Archive",
 			directoryListing(this),
-			aboutSection(this),
 			downloadSection(this),
+			aboutSection(this),
 		);
 	}
 }
@@ -416,7 +462,7 @@ class Dir extends Node {
 	}
 	toHTML() {
 		return basePage(
-			`${this.path} - Eternity Cluster`,
+			`${this.path} - Eternity Cluster Archive`,
 			directoryListing(this),
 			downloadSection(this),
 		);
@@ -426,7 +472,7 @@ class Dir extends Node {
 class InstancesDir extends Dir {
 	toHTML() {
 		return basePage(
-			"Eternity Cluster Instances",
+			"Instances - Eternity Cluster Archive",
 			directoryListing(this),
 			downloadSection(this),
 		);
@@ -456,7 +502,7 @@ class Instance extends Dir {
 	}
 	toHTML() {
 		return basePage(
-			`${this.title} - Eternity Cluster`,
+			`${this.title} - Eternity Cluster Archive`,
 			directoryListing(this),
 			downloadSection(this),
 		);
@@ -466,7 +512,7 @@ class Instance extends Dir {
 class SavesDir extends Dir {
 	toHTML() {
 		return basePage(
-			`Saves for ${this.parent.title} - Eternity Cluster`,
+			`Saves for ${this.parent.title} - Eternity Cluster Archive`,
 			directoryListing(this),
 			downloadSection(this),
 		);
@@ -657,7 +703,7 @@ class Packer {
 		if (node instanceof Instance) {
 			fileName = node.title.replace(" / ", "");
 		} else if (node instanceof InstancesDir) {
-			fileName = "Eternity Cluster Instances";
+			fileName = "Instances - Eternity Cluster Archive";
 		} else if (node instanceof Root) {
 			fileName = "Eternity Cluster Archive";
 		} else {

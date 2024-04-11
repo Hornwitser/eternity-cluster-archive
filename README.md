@@ -16,7 +16,7 @@ If you would like to host your own mirror you can obtain all the files with the 
 
 ```sh
 MIRROR=url-from-above
-wget "{$MIRROR}/files?format=plain" -O files.txt
+wget "${MIRROR}/files?format=plain" -O files.txt
 wget --input-file=files.txt --force-directories --no-host-directories --cut-dirs=1 --directory-prefix=public/
 rm files.txt
 ```

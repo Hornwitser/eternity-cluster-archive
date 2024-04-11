@@ -1,14 +1,93 @@
+* {
+	color-scheme: light dark;
+}
+html {
+	background: #baae83;
+	color: #000;
+	--color: #000;
+}
+body {
+	background: #eec;
+}
 @media (prefers-color-scheme: dark) {
 	html {
-		background: #222227;
+		background: #191925;
 		color: #ddd;
-		max-width: 50rem;
-		margin-inline: auto;
+		--color: #ddd;
 	}
+	body {
+		background: #222230;
+	}
+}
+@media print {
+	* {
+		color-scheme: light;
+	}
+	html, body {
+		background: #fff;
+		color: #000;
+		--color: #000;
+	}
+	.no-print, section.download {
+		display: none;
+	}
+}
+html {
+	max-width: 38rem;
+	margin-inline: auto;
+	line-height: 1.2;
+}
+body {
+	padding: 1rem;
+	margin: 0;
+}
+h1, h2, h3, h4, h5, h6 {
+	font-family: sans-serif;
+	margin-block: 1.2em 0.4em
+}
+h1 {
+	margin-top: 0;
+	width: fit-content;
+	border-bottom: 2px solid var(--color);
+}
+ul.dir {
+	list-style-type: none;
+	padding: 0;
+	display: grid;
+	grid-template-columns: max-content max-content max-content max-content;
+	column-gap: 1rem;
+	overflow-x: auto;
+}
+ul.dir li {
+	display: contents;
+}
+ul.dir .header {
+	font-weight: bold;
+}
+ul.dir .name {
+	grid-column: 1 / span 1;
+}
+ul.dir .content {
+	grid-column: 2 / span 1;
+}
+ul.dir .header:is(.size,.created) {
+	justify-self: center;
+}
+ul.dir .size {
+	font-variant-numeric: tabular-nums;
+	grid-column: 3 / span 1;
+}
+ul.dir .created {
+	font-variant-numeric: tabular-nums;
+	grid-column: 4 / span 1;
 }
 pre {
 	margin-inline: 4rem 0;
 }
-* {
-	color-scheme: light dark;
+label {
+	display: block;
+	margin-bottom: 0.2rem;
+}
+button {
+	padding: 0.25rem 0.45rem;
 }
