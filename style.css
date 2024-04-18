@@ -69,6 +69,7 @@ ul.dir .name {
 }
 ul.dir .content {
 	grid-column: 2 / span 1;
+	justify-self: end;
 }
 ul.dir .header:is(.size,.created) {
 	justify-self: center;
