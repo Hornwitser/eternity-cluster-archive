@@ -29,6 +29,7 @@ services:
   eternity-saves:
     image: ghcr.io/hornwitser/eternity-cluster-archive:master
     init: true
+    restart: always
     ports:
       - 8000:8000
     volumes:
